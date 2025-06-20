@@ -7,16 +7,8 @@ import base64
 
 
 app = Flask(__name__)
-
-# WAHA settings from environment variables
 WAHA_API_URL = config.waha_api_url  # type: ignore
 
-
-
-
-@app.before_request
-def log_request():
-    print(f"[{request.method}] {request.path} - headers: {dict(request.headers)}", flush=True)
     
 @app.route('/pair', methods=['GET'])
 def pair():
