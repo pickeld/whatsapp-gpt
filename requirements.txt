@@ -1,0 +1,5 @@
+requests
+openai
+flask
+python-dotenv
+qrcode[pil]
