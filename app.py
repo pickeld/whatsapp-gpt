@@ -14,13 +14,13 @@ logger = Logger()
 app = Flask(__name__)
 memory = SemanticMemoryManager()
 
-WAHA_API_URL = config.waha_api_url  # type: ignore
-WEBHOOK_URL = config.webhook_url  # type: ignore
+WAHA_API_URL = config.waha_api_url
+WEBHOOK_URL = config.webhook_url
 
 @app.route('/pair', methods=['GET'])
 def pair():
     session_name = "default"
-    headers = {"X-Api-Key": config.waha_api_key}  # type: ignore
+    headers = {"X-Api-Key": config.waha_api_key}
     status_url = f"{WAHA_API_URL}/api/sessions/{session_name}"
     
     try:
@@ -173,7 +173,7 @@ def dalle_handler(payload):
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.json
-    payload = data.get('payload', {})  # type: ignore
+    payload = data.get('payload', {})
     handler = msg_router(payload)
     
     
