@@ -61,12 +61,15 @@ def webhook():
     data = request.json
     payload = data.get('payload', {}) # type: ignore
     if payload and payload.get('fromMe') == True:
-            # Process only incoming text messages
-            if 'body' in payload:
-                print(f"payload id: {payload.get('id')}, body: {payload.get('body')}", flush=True)
+        # Process only incoming text messages
+        if 'body' in payload:
+            chatid = payload.get('id')
+            message = payload.get('body')
+            timestamp = payload.get('timestamp')
+            print(f"ChatID: {chatid}, Message: {message}, Timestamp: {timestamp}", flush=True)
 
     return jsonify({"status": "ok"}), 200
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5002, debug=True if config.log_level else False)
+    app.run(host='0.0.0.0', port=5002, debug=True)
