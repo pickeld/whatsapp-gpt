@@ -5,6 +5,7 @@ from utiles.logger import Logger
 from memory import MemoryManager
 import base64
 import requests
+from providers.gpt import GPT
 
 logger = Logger()
 app = Flask(__name__)
@@ -92,7 +93,8 @@ def msg_router(payload):
 
     
 def gpt_handler(payload):
-    ...
+    gpt = GPT()
+    
     
 def dalle_handler(payload):
     ...
