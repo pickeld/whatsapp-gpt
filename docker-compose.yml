@@ -1,7 +1,7 @@
 services:
   waha:
     container_name: waha
-    image: devlikeapro/waha:arm
+    image: devlikeapro/waha-plus:arm
     ports:
       - "3000:3000"
     env_file:
