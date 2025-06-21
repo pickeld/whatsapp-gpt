@@ -7,6 +7,7 @@ from memory import MemoryManager
 import base64
 import requests
 from providers.gpt import GPT
+from providers.dalle import Dalle
 
 
 logger = Logger()
@@ -77,10 +78,10 @@ def pair():
 def msg_router(payload):
     if not payload.get('fromMe'):
         logger.debug("Message is not from me, ignoring.")
-        return
+        Providers.UNKNOWN
     if "body" not in payload:
         logger.debug("Payload does not contain 'body', ignoring.")
-        return
+        Providers.UNKNOWN
     
     msg = payload.get('body', '').strip()
     if not msg:
@@ -131,7 +132,41 @@ def gpt_handler(payload):
         return {"error": "Failed to send request to API"}
     
 def dalle_handler(payload):
-    ...
+    dalle = Dalle()
+    chat_id = payload.get('to')
+    message = payload.get('body', '').strip()
+    
+    if not chat_id or not message:
+        logger.error("Invalid payload for DALL-E handler")
+        return
+    
+    context = "\n".join(
+        [msg.content for msg in memory_manager.get_history(chat_id) if hasattr(msg, 'content') and isinstance(msg.content, str)]
+    )
+    logger.debug(f"Context for chat {chat_id}: {context}")
+    max_context_length = 4000 - len(message) - 1  # Reserve space for the message and newline
+    truncated_context = context[-max_context_length:] if len(context) > max_context_length else context
+    prompt = f"{truncated_context}\n{message}"
+    
+    image_url = dalle.dalle(prompt)
+    
+    memory_manager.append_user(chat_id, message)
+    if image_url:
+        memory_manager.append_ai(chat_id, image_url)
+    
+    headers = {"X-Api-Key": config.waha_api_key}
+    send_url = f"{config.WAHA_API_URL}/api/sendImage"
+    send_payload = {
+        "chatId": chat_id,
+        "file": {"url": image_url},
+        "session": "default"
+    }
+    try:
+        response = requests.post(send_url, json=send_payload, headers=headers)
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"HTTPError occurred: {e}, Response: {response.text}")
+        return {"error": "Failed to send request to API"}
     
 
 @app.route('/webhook', methods=['POST'])
@@ -144,9 +179,10 @@ def webhook():
     if handler == Providers.GPT:
         gpt_handler(payload)
     elif handler == Providers.DALLE:
+        logger.debug("Handling DALL-E request")
         dalle_handler(payload)
     else:
-        logger.warning(f"No handler found for payload: {handler.get('handler')}")
+        logger.warning(f"UNKNOWN")
 
 
     return jsonify({"status": "ok"}), 200
