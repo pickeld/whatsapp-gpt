@@ -78,14 +78,14 @@ def pair():
 def msg_router(payload):
     if not payload.get('fromMe'):
         logger.debug("Message is not from me, ignoring.")
-        Providers.UNKNOWN
+        return Providers.UNKNOWN
     if "body" not in payload:
         logger.debug("Payload does not contain 'body', ignoring.")
-        Providers.UNKNOWN
+        return Providers.UNKNOWN
     
     msg = payload.get('body', '').strip()
     if not msg:
-        return {}
+        return Providers.UNKNOWN
     if msg.startswith(config.gpt_prefix):
         return Providers.GPT
     elif msg.startswith(config.dalle_prefix):
@@ -144,9 +144,7 @@ def dalle_handler(payload):
         [msg.content for msg in memory_manager.get_history(chat_id) if hasattr(msg, 'content') and isinstance(msg.content, str)]
     )
     logger.debug(f"Context for chat {chat_id}: {context}")
-    max_context_length = 4000 - len(message) - 1  # Reserve space for the message and newline
-    truncated_context = context[-max_context_length:] if len(context) > max_context_length else context
-    prompt = f"{truncated_context}\n{message}"
+    prompt = f"{context}\n{message}"
     
     image_url = dalle.dalle(prompt)
     
