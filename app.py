@@ -2,15 +2,16 @@ import os
 from config import config
 from flask import Flask, request, jsonify, render_template_string
 from utiles.logger import Logger
+from utiles.classes import Providers
 from memory import MemoryManager
 import base64
 import requests
 from providers.gpt import GPT
 
+
 logger = Logger()
 app = Flask(__name__)
-memory = MemoryManager(redis_url=os.getenv("REDIS_URL", "redis://localhost:6379"))
-
+memory_manager = MemoryManager(redis_url=os.getenv("REDIS_URL", "redis://localhost:6379"))
 
 WAHA_API_URL = config.waha_api_url  # type: ignore
 WEBHOOK_URL = config.webhook_url  # type: ignore
@@ -75,37 +76,39 @@ def pair():
 
 def msg_router(payload):
     if not payload.get('fromMe'):
-        return {}
+        logger.debug("Message is not from me, ignoring.")
+        return
     if "body" not in payload:
-        return {}
+        logger.debug("Payload does not contain 'body', ignoring.")
+        return
     
     msg = payload.get('body', '').strip()
     if not msg:
         return {}
     if msg.startswith(config.gpt_prefix):
-        return {"handler": "chatgpt", "payload": payload}
+        return Providers.GPT
     elif msg.startswith(config.dalle_prefix):
-        return {"handler": "dalle", "payload": payload}
+        return Providers.DALLE
     else:
-        logger.warning("Unknown message prefix, routing to default handler")
-        return {"handler": "unknown", "payload": payload}
+        return Providers.UNKNOWN
+    
     
 
     
 def gpt_handler(payload):
     gpt = GPT()
-    chat_id = payload.get('id')
+    chat_id = payload.get('to')
     message = payload.get('body', '').strip()
     
     if not chat_id or not message:
         logger.error("Invalid payload for GPT handler")
         return
     
-    memory_manager = MemoryManager()
+    
     context = "\n".join(
         [msg.content for msg in memory_manager.get_history(chat_id) if hasattr(msg, 'content') and isinstance(msg.content, str)]
     )
-    
+    logger.debug(f"Context for chat {chat_id}: {context}")
     prompt = f"{context}\n{message}"
     response = gpt.chat(prompt)
     
@@ -114,13 +117,18 @@ def gpt_handler(payload):
         memory_manager.append_ai(chat_id, response)
     
     headers = {"X-Api-Key": config.waha_api_key}
-    send_url = f"{config.WAHA_API_URL}/api/messages"
+    send_url = f"{config.WAHA_API_URL}/api/sendText"
     send_payload = {
         "chatId": chat_id,
-        "body": response
+        "text": response,
+        "session": "default"
     }
-    requests.post(send_url, json=send_payload, headers=headers)
-    
+    try:
+        response = requests.post(send_url, json=send_payload, headers=headers)
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"HTTPError occurred: {e}, Response: {response.text}")
+        return {"error": "Failed to send request to API"}
     
 def dalle_handler(payload):
     ...
@@ -131,44 +139,15 @@ def webhook():
     data = request.json
     payload = data.get('payload', {})  # type: ignore
     handler = msg_router(payload)
-    logger.debug(f"Sending payload to handler: {handler.get('handler')}")
-    # #####
-    # if payload and payload.get('fromMe') == True:
-    #     # Process only incoming text messages
-    #     if 'body' in payload:
-    #         chatid = payload.get('id')
-    #         message = payload.get('body')
-    #         timestamp = payload.get('timestamp')
-    #         print(f"ChatID: {chatid}, Message: {message}, Timestamp: {timestamp}", flush=True)
+    
+    
+    if handler == Providers.GPT:
+        gpt_handler(payload)
+    elif handler == Providers.DALLE:
+        dalle_handler(payload)
+    else:
+        logger.warning(f"No handler found for payload: {handler.get('handler')}")
 
-    #         # Check if message starts with GPT prefix
-    #         if message.startswith(config.gpt_prefix):
-    #             # Retrieve context from Redis
-    #             context = "\n".join(
-    #                 [msg.content for msg in memory.get_history(chatid) if hasattr(msg, 'content') and isinstance(msg.content, str)]
-    #             )
-
-    #             # Initialize ChatGPT
-    #             from providers.openai_gpt import OpenAIChatGPT
-    #             chatgpt = OpenAIChatGPT()
-
-    #             # Send message and context to ChatGPT
-    #             prompt = f"{context}\n{message}"
-    #             response = chatgpt.chat(prompt)
-
-    #             # Update Redis context
-    #             memory.append_user(chatid, message)
-    #             if response:
-    #                 memory.append_ai(chatid, response)
-
-    #             # Send response back to user
-    #             headers = {"X-Api-Key": config.waha_api_key}  # type: ignore
-    #             send_url = f"{WAHA_API_URL}/api/messages"
-    #             send_payload = {
-    #                 "chatId": chatid,
-    #                 "body": response
-    #             }
-    #             requests.post(send_url, json=send_payload, headers=headers)
 
     return jsonify({"status": "ok"}), 200
 
