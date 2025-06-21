@@ -94,6 +94,32 @@ def msg_router(payload):
     
 def gpt_handler(payload):
     gpt = GPT()
+    chat_id = payload.get('id')
+    message = payload.get('body', '').strip()
+    
+    if not chat_id or not message:
+        logger.error("Invalid payload for GPT handler")
+        return
+    
+    memory_manager = MemoryManager()
+    context = "\n".join(
+        [msg.content for msg in memory_manager.get_history(chat_id) if hasattr(msg, 'content') and isinstance(msg.content, str)]
+    )
+    
+    prompt = f"{context}\n{message}"
+    response = gpt.chat(prompt)
+    
+    memory_manager.append_user(chat_id, message)
+    if response:
+        memory_manager.append_ai(chat_id, response)
+    
+    headers = {"X-Api-Key": config.waha_api_key}
+    send_url = f"{config.WAHA_API_URL}/api/messages"
+    send_payload = {
+        "chatId": chat_id,
+        "body": response
+    }
+    requests.post(send_url, json=send_payload, headers=headers)
     
     
 def dalle_handler(payload):
