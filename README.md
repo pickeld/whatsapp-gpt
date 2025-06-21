@@ -8,6 +8,7 @@ A Flask-based integration between WhatsApp (via the WAHA API) and OpenAI's GPT m
 - **Webhook Handling:** Receives and processes incoming WhatsApp messages.
 - **OpenAI Integration:** Sends prompts to OpenAI's GPT models and returns responses.
 - **Environment Configuration:** Uses `.env` files for easy configuration.
+- **Media Support:** For sending files and other media, use the WAHA-Plus Docker image, available only if you donate to the project. The core Docker image does not support receiving media from DALL-E.
 
 ## Project Structure
 
@@ -112,6 +113,9 @@ This project integrates WhatsApp messaging with OpenAI's GPT models using Flask.
 - **OpenAI GPT**: Handles AI-driven responses.
 - **Flask**: Manages the application and webhook endpoints.
 - **Semantic Memory**: Utilizes Qdrant for storing and retrieving semantic embeddings, enabling advanced memory-based operations.
+- **Ollama Support**: Planned support for Ollama integration.
+- **Gemini Support**: Planned support for Gemini integration.
+- **TTS and STT**: Planned support for text-to-speech and speech-to-text functionalities.
 
 ## License
 
