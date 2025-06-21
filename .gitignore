@@ -36,3 +36,6 @@ venv/
 .roo/*
 .roomodes
 
+
+# Ignore Memory Bank directory
+memory-bank/
