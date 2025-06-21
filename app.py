@@ -3,7 +3,7 @@ from config import config
 from flask import Flask, request, jsonify, render_template_string
 from utiles.logger import Logger
 from utiles.classes import Providers
-from memory import SemanticMemoryManager
+from memory import MemoryManager
 import base64
 import requests
 from providers.gpt import GPT
@@ -12,7 +12,7 @@ from providers.dalle import Dalle
 
 logger = Logger()
 app = Flask(__name__)
-memory = SemanticMemoryManager()
+memory = MemoryManager()
 
 WAHA_API_URL = config.waha_api_url
 WEBHOOK_URL = config.webhook_url
@@ -42,18 +42,18 @@ def pair():
         if start_response.status_code not in [201, 422]:
             start_response.raise_for_status()
 
-        # ✅ 3. Set webhook for the session
+        # 3. Set webhook for the session
         webhook_url = f"{WAHA_API_URL}/api/sessions/{session_name}"
         config_payload = {
             "config": {
                 "webhooks": [
                     {
-                        "url": WEBHOOK_URL,  # from config or env
+                        "url": WEBHOOK_URL,
                         "events": ["message.any", "session.status"]
                     }
                 ]
-                }
             }
+        }
         webhook_response = requests.put(webhook_url, json=config_payload, headers=headers)
         webhook_response.raise_for_status()
 
@@ -92,10 +92,8 @@ def msg_router(payload):
         return Providers.DALLE
     else:
         return Providers.UNKNOWN
-    
-    
 
-    
+
 def gpt_handler(payload):
     gpt = GPT()
     chat_id = payload.get('to')
@@ -105,10 +103,11 @@ def gpt_handler(payload):
         logger.error("Invalid payload for GPT handler")
         return
     
-    semantic = memory.retrieve_relevant(message, chat_id, k=5)
-    buffer = memory.get_recent_history(chat_id, max_chars=1500)
+    semantic = memory.retrieve_from_long_term_memory(message, chat_id, k=5)
+    buffer = memory.get_recent_short_term_history(chat_id, max_chars=1500)
     
-    context = "\n".join([msg.content for msg in buffer]) + "\n" + "\n".join(semantic)
+    context = "\n".join([str(msg.content) for msg in buffer]) + "\n" + "\n".join(semantic)
+
     logger.debug(f"Context for chat {chat_id}: {context}")
     prompt = f"{context}\n{message}"
     response = gpt.chat(prompt)
@@ -117,12 +116,11 @@ def gpt_handler(payload):
         logger.error("GPT returned no response")
         return
 
-    memory.append_user(chat_id, message)
-    if response:
-        memory.append_ai(chat_id, response)
+    memory.append_user_message(chat_id, message)
+    memory.append_ai_message(chat_id, response)
     
     headers = {"X-Api-Key": config.waha_api_key}
-    send_url = f"{config.WAHA_API_URL}/api/sendText"
+    send_url = f"{WAHA_API_URL}/api/sendText"
     send_payload = {
         "chatId": chat_id,
         "text": response,
@@ -135,6 +133,7 @@ def gpt_handler(payload):
         logger.error(f"HTTPError occurred: {e}, Response: {response.text}")
         return {"error": "Failed to send request to API"}
     
+
 def dalle_handler(payload):
     dalle = Dalle()
     chat_id = payload.get('to')
@@ -144,19 +143,20 @@ def dalle_handler(payload):
         logger.error("Invalid payload for DALL-E handler")
         return
     
-    buffer = memory.get_recent_history(chat_id, max_chars=3500, exclude_prefixes=["!!"])
-    context = "\n".join([msg.content for msg in buffer])
+    buffer = memory.get_recent_short_term_history(chat_id, max_chars=3500, exclude_prefixes=["!!"])
+    context = "\n".join([str(msg.content) for msg in buffer])
+
     logger.debug(f"Context for chat {chat_id}: {context}")
     prompt = f"{context}\n{message}"
     
     image_url = dalle.dalle(prompt)
     
-    memory.append_user(chat_id, message)
+    memory.append_user_message(chat_id, message)
     if image_url:
-        memory.append_ai(chat_id, "[DALLE_IMAGE]")
+        memory.append_ai_message(chat_id, "[DALLE_IMAGE]")
     
     headers = {"X-Api-Key": config.waha_api_key}
-    send_url = f"{config.WAHA_API_URL}/api/sendImage"
+    send_url = f"{WAHA_API_URL}/api/sendImage"
     send_payload = {
         "chatId": chat_id,
         "file": {"url": image_url},
@@ -176,15 +176,13 @@ def webhook():
     payload = data.get('payload', {})
     handler = msg_router(payload)
     
-    
     if handler == Providers.GPT:
         gpt_handler(payload)
     elif handler == Providers.DALLE:
         logger.debug("Handling DALL-E request")
         dalle_handler(payload)
     else:
-        logger.warning(f"UNKNOWN")
-
+        logger.warning("Received unknown handler request")
 
     return jsonify({"status": "ok"}), 200
 
