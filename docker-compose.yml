@@ -1,5 +1,6 @@
 services:
   waha:
+    container_name: waha
     image: devlikeapro/waha:arm
     ports:
       - "3000:3000"
@@ -9,7 +10,22 @@ services:
       - waha_data:/app/data
     restart: unless-stopped
 
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfilename "appendonly.aof"
+      --appendfsync everysec
+      --save 300 10
+      --loglevel warning
+    restart: unless-stopped
 
 volumes:
   waha_data:
-  memobase_data:
+  redis_data:
