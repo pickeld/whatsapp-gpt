@@ -13,62 +13,63 @@ import uuid, hashlib
 logger = Logger(__name__)
 
 
-class SemanticMemoryManager:
+class MemoryManager:
     def __init__(self, redis_url: str = "redis://localhost:6379", qdrant_url: str = "http://localhost:6333"):
-        logger.info(f"Initializing SemanticMemoryManager with Redis URL: {redis_url}")
+        logger.info(f"Initializing MemoryManager with Redis for short-term memory")
         self.redis_url = redis_url
         self.qdrant_collection_name = config.qdrant_collection_name
         self.embedding_model = config.embedding_model
-        self._cache = {}
+        self._short_term_memory_cache = {}
 
-        # Setup Qdrant
-        self.qdrant_enabled = qdrant_url is not None
-        if self.qdrant_enabled:
-            logger.info("Initializing Qdrant qdrant_client for semantic memory")
+        # Long-term memory (Qdrant)
+        self.long_term_memory_enabled = qdrant_url is not None
+        if self.long_term_memory_enabled:
+            logger.info("Initializing MemoryManager with Qdrant for long-term memory")
             self.qdrant_client = qdrant_client.QdrantClient(url=qdrant_url)
-            self._init_qdrant()
+            self._init_long_term_memory()
             self.vector_store = QdrantVectorStore(
                 client=self.qdrant_client,
                 collection_name=self.qdrant_collection_name,
                 embedding=HuggingFaceEmbeddings(model_name=self.embedding_model)
             )
 
-    def _init_qdrant(self):
+    def _init_long_term_memory(self):
         if self.qdrant_collection_name not in {col.name for col in self.qdrant_client.get_collections().collections}:
             self.qdrant_client.create_collection(
                 collection_name=self.qdrant_collection_name,
                 vectors_config=VectorParams(size=384, distance=Distance.COSINE)
             )
 
-    def get(self, chat_id: str) -> ConversationBufferMemory:
-        if chat_id not in self._cache:
+    # Short-term memory retrieval
+    def get_short_term_memory(self, chat_id: str) -> ConversationBufferMemory:
+        if chat_id not in self._short_term_memory_cache:
             history = RedisChatMessageHistory(session_id=chat_id, url=self.redis_url)
             memory = ConversationBufferMemory(chat_memory=history, return_messages=True)
-            self._cache[chat_id] = memory
-        return self._cache[chat_id]
+            self._short_term_memory_cache[chat_id] = memory
+        return self._short_term_memory_cache[chat_id]
 
-    def get_history(self, chat_id: str) -> List[BaseMessage]:
-        return self.get(chat_id).chat_memory.messages
+    def get_short_term_history(self, chat_id: str) -> List[BaseMessage]:
+        return self.get_short_term_memory(chat_id).chat_memory.messages
 
-    def append_user(self, chat_id: str, message: str):
-        self.get(chat_id).chat_memory.add_user_message(message)
-        if self.qdrant_enabled:
-            self._save_to_vector_store(chat_id, message, role="user")
+    def append_user_message(self, chat_id: str, message: str):
+        self.get_short_term_memory(chat_id).chat_memory.add_user_message(message)
+        if self.long_term_memory_enabled:
+            self._save_to_long_term_memory(chat_id, message, role="user")
 
-    def append_ai(self, chat_id: str, message: str):
-        self.get(chat_id).chat_memory.add_ai_message(message)
-        if self.qdrant_enabled:
-            self._save_to_vector_store(chat_id, message, role="ai")
+    def append_ai_message(self, chat_id: str, message: str):
+        self.get_short_term_memory(chat_id).chat_memory.add_ai_message(message)
+        if self.long_term_memory_enabled:
+            self._save_to_long_term_memory(chat_id, message, role="ai")
 
-    def clear(self, chat_id: str):
-        if chat_id in self._cache:
-            self._cache[chat_id].chat_memory.clear()
+    def clear_short_term_memory(self, chat_id: str):
+        if chat_id in self._short_term_memory_cache:
+            self._short_term_memory_cache[chat_id].chat_memory.clear()
 
-    def sessions(self) -> List[str]:
-        return list(self._cache.keys())
+    def list_active_sessions(self) -> List[str]:
+        return list(self._short_term_memory_cache.keys())
 
-    def get_recent_history(self, chat_id: str, max_chars: int = 3500, exclude_prefixes: List[str] = None) -> List[BaseMessage]:
-        messages = self.get_history(chat_id)
+    def get_recent_short_term_history(self, chat_id: str, max_chars: int = 3500, exclude_prefixes: List[str] = None) -> List[BaseMessage]:
+        messages = self.get_short_term_history(chat_id)
         buffer = []
         total_chars = 0
         exclude_prefixes = exclude_prefixes or []
@@ -87,7 +88,8 @@ class SemanticMemoryManager:
 
         return buffer
 
-    def _save_to_vector_store(self, chat_id: str, message: str, role="user"):
+    # Long-term memory storage
+    def _save_to_long_term_memory(self, chat_id: str, message: str, role="user"):
         digest = hashlib.sha1(message.encode()).hexdigest()
         point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{chat_id}-{role}-{digest}"))
 
@@ -95,12 +97,12 @@ class SemanticMemoryManager:
             page_content=message,
             metadata={"chat_id": chat_id, "role": role}
         )
-        logger.debug(f"Saving message to Qdrant for {chat_id} ({role})")
+        logger.debug(f"Saving message to long-term memory for {chat_id} ({role})")
         self.vector_store.add_documents([doc], ids=[point_id])
 
-    def retrieve_relevant(self, query: str, chat_id: str, k: int = 5) -> List[str]:
-        if not self.qdrant_enabled:
-            logger.warning("Qdrant not initialized — semantic retrieval skipped.")
+    def retrieve_from_long_term_memory(self, query: str, chat_id: str, k: int = 5) -> List[str]:
+        if not self.long_term_memory_enabled:
+            logger.warning("Long-term memory (Qdrant) not initialized — semantic retrieval skipped.")
             return []
 
         try:
@@ -115,5 +117,5 @@ class SemanticMemoryManager:
             docs = self.vector_store.similarity_search(query, k=k, filter=meta_filter)
             return [doc.page_content for doc in docs]
         except Exception as e:
-            logger.error(f"Qdrant retrieval failed: {e}")
+            logger.error(f"Long-term memory retrieval failed: {e}")
             return []
