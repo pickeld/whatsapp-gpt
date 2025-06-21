@@ -3,7 +3,7 @@ from config import config
 from flask import Flask, request, jsonify, render_template_string
 from utiles.logger import Logger
 from utiles.classes import Providers
-from memory import MemoryManager
+from memory import SemanticMemoryManager
 import base64
 import requests
 from providers.gpt import GPT
@@ -12,7 +12,7 @@ from providers.dalle import Dalle
 
 logger = Logger()
 app = Flask(__name__)
-memory_manager = MemoryManager(redis_url=os.getenv("REDIS_URL", "redis://localhost:6379"))
+memory = SemanticMemoryManager()
 
 WAHA_API_URL = config.waha_api_url  # type: ignore
 WEBHOOK_URL = config.webhook_url  # type: ignore
@@ -105,17 +105,21 @@ def gpt_handler(payload):
         logger.error("Invalid payload for GPT handler")
         return
     
+    semantic = memory.retrieve_relevant(message, chat_id, k=5)
+    buffer = memory.get_recent_history(chat_id, max_chars=1500)
     
-    context = "\n".join(
-        [msg.content for msg in memory_manager.get_history(chat_id) if hasattr(msg, 'content') and isinstance(msg.content, str)]
-    )
+    context = "\n".join([msg.content for msg in buffer]) + "\n" + "\n".join(semantic)
     logger.debug(f"Context for chat {chat_id}: {context}")
     prompt = f"{context}\n{message}"
     response = gpt.chat(prompt)
     
-    memory_manager.append_user(chat_id, message)
+    if not response:
+        logger.error("GPT returned no response")
+        return
+
+    memory.append_user(chat_id, message)
     if response:
-        memory_manager.append_ai(chat_id, response)
+        memory.append_ai(chat_id, response)
     
     headers = {"X-Api-Key": config.waha_api_key}
     send_url = f"{config.WAHA_API_URL}/api/sendText"
@@ -140,17 +144,16 @@ def dalle_handler(payload):
         logger.error("Invalid payload for DALL-E handler")
         return
     
-    context = "\n".join(
-        [msg.content for msg in memory_manager.get_history(chat_id) if hasattr(msg, 'content') and isinstance(msg.content, str)]
-    )
+    buffer = memory.get_recent_history(chat_id, max_chars=3500, exclude_prefixes=["!!"])
+    context = "\n".join([msg.content for msg in buffer])
     logger.debug(f"Context for chat {chat_id}: {context}")
     prompt = f"{context}\n{message}"
     
     image_url = dalle.dalle(prompt)
     
-    memory_manager.append_user(chat_id, message)
+    memory.append_user(chat_id, message)
     if image_url:
-        memory_manager.append_ai(chat_id, image_url)
+        memory.append_ai(chat_id, "[DALLE_IMAGE]")
     
     headers = {"X-Api-Key": config.waha_api_key}
     send_url = f"{config.WAHA_API_URL}/api/sendImage"
