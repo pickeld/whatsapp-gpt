@@ -1,11 +1,12 @@
 import os
 from config import config
 from flask import Flask, request, jsonify, render_template_string
+from utiles.logger import Logger
 from memory import MemoryManager
 import base64
 import requests
 
-
+logger = Logger()
 app = Flask(__name__)
 memory = MemoryManager(redis_url=os.getenv("REDIS_URL", "redis://localhost:6379"))
 
@@ -70,17 +71,76 @@ def pair():
     except requests.exceptions.RequestException as e:
         return f"Error contacting WAHA API: {e}", 500
 
+
+def msg_router(payload):
+    if not payload.get('fromMe'):
+        return {}
+    if "body" not in payload:
+        return {}
+    
+    msg = payload.get('body', '').strip()
+    if not msg:
+        return {}
+    if msg.startswith(config.gpt_prefix):
+        return {"handler": "chatgpt", "payload": payload}
+    elif msg.startswith(config.dalle_prefix):
+        return {"handler": "dalle", "payload": payload}
+    else:
+        logger.warning("Unknown message prefix, routing to default handler")
+        return {"handler": "unknown", "payload": payload}
+    
+
+    
+def gpt_handler(payload):
+    ...
+    
+def dalle_handler(payload):
+    ...
+    
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.json
-    payload = data.get('payload', {}) # type: ignore
-    if payload and payload.get('fromMe') == True:
-        # Process only incoming text messages
-        if 'body' in payload:
-            chatid = payload.get('id')
-            message = payload.get('body')
-            timestamp = payload.get('timestamp')
-            print(f"ChatID: {chatid}, Message: {message}, Timestamp: {timestamp}", flush=True)
+    payload = data.get('payload', {})  # type: ignore
+    handler = msg_router(payload)
+    logger.debug(f"Sending payload to handler: {handler.get('handler')}")
+    # #####
+    # if payload and payload.get('fromMe') == True:
+    #     # Process only incoming text messages
+    #     if 'body' in payload:
+    #         chatid = payload.get('id')
+    #         message = payload.get('body')
+    #         timestamp = payload.get('timestamp')
+    #         print(f"ChatID: {chatid}, Message: {message}, Timestamp: {timestamp}", flush=True)
+
+    #         # Check if message starts with GPT prefix
+    #         if message.startswith(config.gpt_prefix):
+    #             # Retrieve context from Redis
+    #             context = "\n".join(
+    #                 [msg.content for msg in memory.get_history(chatid) if hasattr(msg, 'content') and isinstance(msg.content, str)]
+    #             )
+
+    #             # Initialize ChatGPT
+    #             from providers.openai_gpt import OpenAIChatGPT
+    #             chatgpt = OpenAIChatGPT()
+
+    #             # Send message and context to ChatGPT
+    #             prompt = f"{context}\n{message}"
+    #             response = chatgpt.chat(prompt)
+
+    #             # Update Redis context
+    #             memory.append_user(chatid, message)
+    #             if response:
+    #                 memory.append_ai(chatid, response)
+
+    #             # Send response back to user
+    #             headers = {"X-Api-Key": config.waha_api_key}  # type: ignore
+    #             send_url = f"{WAHA_API_URL}/api/messages"
+    #             send_payload = {
+    #                 "chatId": chatid,
+    #                 "body": response
+    #             }
+    #             requests.post(send_url, json=send_payload, headers=headers)
 
     return jsonify({"status": "ok"}), 200
 
