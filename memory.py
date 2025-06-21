@@ -1,12 +1,15 @@
-# memory.py
 from langchain.memory import ConversationBufferMemory
 from langchain_community.chat_message_histories import RedisChatMessageHistory
 from langchain.schema import BaseMessage
 from typing import List
-import os
+from utiles.logger import Logger
+
+
+logger = Logger(__name__)
 
 class MemoryManager:
     def __init__(self, redis_url: str = "redis://localhost:6379"):
+        logger.info(f"Initializing MemoryManager with Redis URL: {redis_url}")
         self.redis_url = redis_url
         self._cache = {}  # Optional performance cache
 
@@ -29,7 +32,7 @@ class MemoryManager:
     def append_user(self, chat_id: str, message: str):
         """
         Append a user message to memory.
-        """
+        """ 
         self.get(chat_id).chat_memory.add_user_message(message)
 
     def append_ai(self, chat_id: str, message: str):
