@@ -19,9 +19,11 @@ class Logger:
             self.logger.addHandler(handler)
 
     def _log(self, level: str, message: str):
-        # Get caller function name (2 frames up)
-        caller = inspect.currentframe().f_back.f_back.f_code.co_name
-        formatted = f"func: {caller} | {message}"
+        # Get caller function name and filename (2 frames up)
+        frame = inspect.currentframe().f_back.f_back
+        caller = frame.f_code.co_name
+        filename = frame.f_code.co_filename.split("/")[-1]
+        formatted = f"file: {filename} | func: {caller} | {message}"
         getattr(self.logger, level)(formatted)
 
     def debug(self, message: str):
