@@ -39,7 +39,7 @@ def register_routes(app):
                     "webhooks": [
                         {
                             "url": WEBHOOK_URL,  # from config or env
-                            "events": ["message", "session.status"]
+                            "events": ["message.any", "session.status"]
                         }
                     ]
                     }
