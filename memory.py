@@ -1,6 +1,8 @@
 from typing import List
 from langchain.memory import ConversationBufferMemory
 from langchain_community.chat_message_histories import RedisChatMessageHistory
+from langchain_core.messages import messages_from_dict
+import json
 from langchain.schema import BaseMessage, Document
 from langchain_qdrant import QdrantVectorStore
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -8,9 +10,48 @@ from qdrant_client.http.models import VectorParams, Distance, Filter, FieldCondi
 from utiles.logger import Logger
 from config import config
 import qdrant_client
+import redis
+
 import uuid, hashlib
 
 logger = Logger(__name__)
+
+
+class LimitedRedisChatMessageHistory(RedisChatMessageHistory):
+    def __init__(self, session_id: str, url: str = "redis://localhost:6379", ttl: int = None, key_prefix: str = "message_store"):
+        super().__init__(session_id=session_id, url=url, ttl=ttl, key_prefix=key_prefix)
+        self._redis = redis.Redis.from_url(url)
+
+    def get_recent_messages(self, limit: int = 10) -> list[BaseMessage]:
+        try:
+            raw_items = self._redis.lrange(self.key, -limit * 3, -1)  # headroom for dedup
+            messages = [msg for msg in self._safe_parse_messages(raw_items)]
+            deduped = self._dedup_messages(messages)
+            return deduped[-limit:]  # keep last `limit` unique messages
+        except Exception as e:
+            print(f"[ERROR] Failed to get recent messages from Redis: {e}")
+            return []
+
+    def _safe_parse_messages(self, items: list[bytes]) -> list[BaseMessage]:
+        messages = []
+        for item in reversed(items):  # start from newest
+            try:
+                msg_dict = json.loads(item)
+                msg_obj = messages_from_dict([msg_dict])[0]
+                messages.append(msg_obj)
+            except Exception as e:
+                print(f"[WARN] Could not parse message: {e}")
+        return list(reversed(messages))  # restore order (oldest → newest)
+
+    def _dedup_messages(self, messages: list[BaseMessage]) -> list[BaseMessage]:
+        seen = set()
+        unique = []
+        for msg in messages:
+            content = getattr(msg, "content", None)
+            if content and content not in seen:
+                seen.add(content)
+                unique.append(msg)
+        return unique
 
 
 class MemoryManager:
@@ -40,16 +81,21 @@ class MemoryManager:
                 vectors_config=VectorParams(size=384, distance=Distance.COSINE)
             )
 
+    def _init_short_term_memory(self, chat_id: str):
+        history = LimitedRedisChatMessageHistory(session_id=chat_id, url=self.redis_url)
+        memory = ConversationBufferMemory(chat_memory=history, return_messages=True)
+        self._short_term_memory_cache[chat_id] = {"memory": memory, "history": history}
 
-    # Short-term memory retrieval
-    def get_short_term_memory(self, chat_id: str, msgs: bool = False) -> ConversationBufferMemory:
+    def get_short_term_memory(self, chat_id: str, msgs: bool = False, limit: int = None):
         if chat_id not in self._short_term_memory_cache:
-            history = RedisChatMessageHistory(session_id=chat_id, url=self.redis_url)
-            memory = ConversationBufferMemory(chat_memory=history, return_messages=True)
-            self._short_term_memory_cache[chat_id] = memory
+            self._init_short_term_memory(chat_id)
+
+        entry = self._short_term_memory_cache[chat_id]
         if msgs:
-            return self._short_term_memory_cache[chat_id].chat_memory.messages
-        return self._short_term_memory_cache[chat_id]
+            if limit:
+                return entry["history"].get_recent_messages(limit)
+            return entry["history"].messages
+        return entry["memory"]
 
     def append_user_message(self, chat_id: str, message: str):
         self.get_short_term_memory(chat_id).chat_memory.add_user_message(message)
@@ -61,15 +107,8 @@ class MemoryManager:
         if self.long_term_memory_enabled:
             self._save_to_long_term_memory(chat_id, message, role="ai")
 
-    def clear_short_term_memory(self, chat_id: str):
-        if chat_id in self._short_term_memory_cache:
-            self._short_term_memory_cache[chat_id].chat_memory.clear()
-
-    def list_active_sessions(self) -> List[str]:
-        return list(self._short_term_memory_cache.keys())
-
-    def get_recent_short_term_history(self, chat_id: str, max_chars: int = 3500, exclude_prefixes: List[str] = None) -> List[BaseMessage]:
-        messages = self.get_short_term_memory(chat_id, msgs=True)
+    def get_recent_short_term_history(self, chat_id: str, max_chars: int = 3500, exclude_prefixes: List[str] = None, limit: int = 20) -> List[BaseMessage]:
+        messages = self.get_short_term_memory(chat_id, msgs=True, limit=limit)
         buffer = []
         total_chars = 0
         exclude_prefixes = exclude_prefixes or []
@@ -88,15 +127,10 @@ class MemoryManager:
 
         return buffer
 
-    # Long-term memory storage
     def _save_to_long_term_memory(self, chat_id: str, message: str, role="user"):
         digest = hashlib.sha1(message.encode()).hexdigest()
         point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{chat_id}-{role}-{digest}"))
-
-        doc = Document(
-            page_content=message,
-            metadata={"chat_id": chat_id, "role": role}
-        )
+        doc = Document(page_content=message, metadata={"chat_id": chat_id, "role": role})
         logger.debug(f"Storing to long-term: [{role}] {message}")
         self.vector_store.add_documents([doc], ids=[point_id])
 
@@ -106,16 +140,11 @@ class MemoryManager:
             return []
 
         try:
-            meta_filter = Filter(
-                must=[
-                    FieldCondition(
-                        key="metadata.chat_id",
-                        match=MatchValue(value=chat_id)
-                    )
-                ]
-            )
-            docs = self.vector_store.similarity_search(query, k=k, filter=meta_filter)
-            return [doc.page_content for doc in docs]
+            meta_filter = Filter(must=[
+                FieldCondition(key="metadata.chat_id", match=MatchValue(value=chat_id))
+            ])
+            docs = self.vector_store.similarity_search_with_score(query, k=k, filter=meta_filter)
+            return [doc.page_content for doc, score in docs if score >= 0.65]
         except Exception as e:
             logger.error(f"Long-term memory retrieval failed: {e}")
             return []
