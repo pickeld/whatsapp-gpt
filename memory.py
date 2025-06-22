@@ -83,7 +83,7 @@ class MemoryManager:
             msg_len = len(msg.content)
             if total_chars + msg_len > max_chars:
                 break
-            buffer.insert(0, msg)
+            buffer.append(msg)
             total_chars += msg_len
 
         return buffer
@@ -97,7 +97,7 @@ class MemoryManager:
             page_content=message,
             metadata={"chat_id": chat_id, "role": role}
         )
-        logger.debug(f"Saving message to long-term memory for {chat_id} ({role})")
+        logger.debug(f"Storing to long-term: [{role}] {message}")
         self.vector_store.add_documents([doc], ids=[point_id])
 
     def retrieve_from_long_term_memory(self, query: str, chat_id: str, k: int = 5) -> List[str]:
