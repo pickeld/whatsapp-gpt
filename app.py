@@ -104,9 +104,13 @@ def gpt_handler(payload):
         return
     
     semantic = memory.retrieve_from_long_term_memory(message, chat_id, k=5)
-    buffer = memory.get_recent_short_term_history(chat_id, max_chars=1500)
+    logger.debug(f"Semantic retrieval for chat {chat_id}: {semantic}")
+    buffer = memory.get_recent_short_term_history(chat_id, limit=12, max_chars=2000)
+    logger.debug(f"Short-term memory buffer for chat {chat_id}: {buffer}")
     
-    context = "\n".join([str(msg.content) for msg in buffer]) + "\n" + "\n".join(semantic)
+    # context = "\n".join([str(msg.content) for msg in buffer]) + "\n" + "\n".join(semantic)
+    context = "\n".join(semantic)
+
 
     logger.debug(f"Context for chat {chat_id}: {context}")
     prompt = f"{context}\n{message}"
