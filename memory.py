@@ -41,15 +41,14 @@ class MemoryManager:
             )
 
     # Short-term memory retrieval
-    def get_short_term_memory(self, chat_id: str) -> ConversationBufferMemory:
+    def get_short_term_memory(self, chat_id: str, msgs: bool = False) -> ConversationBufferMemory:
         if chat_id not in self._short_term_memory_cache:
             history = RedisChatMessageHistory(session_id=chat_id, url=self.redis_url)
             memory = ConversationBufferMemory(chat_memory=history, return_messages=True)
             self._short_term_memory_cache[chat_id] = memory
+        if msgs:
+            return self._short_term_memory_cache[chat_id].chat_memory.messages
         return self._short_term_memory_cache[chat_id]
-
-    def get_short_term_history(self, chat_id: str) -> List[BaseMessage]:
-        return self.get_short_term_memory(chat_id).chat_memory.messages
 
     def append_user_message(self, chat_id: str, message: str):
         self.get_short_term_memory(chat_id).chat_memory.add_user_message(message)
@@ -69,7 +68,7 @@ class MemoryManager:
         return list(self._short_term_memory_cache.keys())
 
     def get_recent_short_term_history(self, chat_id: str, max_chars: int = 3500, exclude_prefixes: List[str] = None) -> List[BaseMessage]:
-        messages = self.get_short_term_history(chat_id)
+        messages = self.get_short_term_memory(chat_id, msgs=True)
         buffer = []
         total_chars = 0
         exclude_prefixes = exclude_prefixes or []
