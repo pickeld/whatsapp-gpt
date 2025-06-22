@@ -40,6 +40,7 @@ class MemoryManager:
                 vectors_config=VectorParams(size=384, distance=Distance.COSINE)
             )
 
+
     # Short-term memory retrieval
     def get_short_term_memory(self, chat_id: str, msgs: bool = False) -> ConversationBufferMemory:
         if chat_id not in self._short_term_memory_cache:
