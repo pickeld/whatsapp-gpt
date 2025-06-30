@@ -3,5 +3,4 @@ openai
 flask
 python-dotenv
 qrcode[pil]
-memobase
-langchain-huggingface
+agent-memory-client
