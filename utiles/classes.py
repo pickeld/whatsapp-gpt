@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 @dataclass
 class Providers:
-    GPT = "gpt"
+    CHAT = "chat"
     DALLE = "dalle"
     UNKNOWN = "unknown"
 
