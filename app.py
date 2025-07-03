@@ -4,6 +4,7 @@ import requests
 from typing import Dict
 from flask import Flask, request, jsonify, render_template_string
 
+
 from config import config
 from utiles.logger import Logger
 from utiles.classes import Providers
@@ -14,7 +15,9 @@ from providers.dalle import Dalle
 
 logger = Logger()
 app = Flask(__name__)
-memory = MemoryAgent()
+
+
+
 
 
 def send_request(method: str, endpoint: str, payload: Dict = None):
@@ -34,6 +37,8 @@ def send_request(method: str, endpoint: str, payload: Dict = None):
         logger.debug(f"Request to {url} completed with status code {response.status_code}")
         return response
     except Exception as e:
+        if "/api/sessions/" in endpoint:
+            return {"error": str(e)}
         logger.error(f"Request failed: {e}")
         return {"error": str(e)}
 
@@ -47,32 +52,14 @@ def filter_msg(payload: Dict) -> bool:
 
 def msg_router(msg: str):
     if msg.startswith(config.gpt_prefix):
-        return Providers.GPT
+        return Providers.CHAT
     if msg.startswith(config.dalle_prefix):
         return Providers.DALLE
     raise ValueError("Unrecognized message prefix")
 
 
-def gpt_handler(payload: Dict):
-    gpt = GPT()
+def chat_agent(payload: Dict, response:str):
     chat_id = payload.get("to")
-    message = payload.get("body", "").strip()
-
-    if not chat_id or not message:
-        logger.error("Invalid payload for GPT handler")
-        return
-
-    context = memory.get_context(chat_id, max_chars=3000)
-    print(f"Context for chat {chat_id}: {context}")
-    prompt = f"{context}\n{message}" if context else message
-    response = gpt.chat(prompt)
-
-    if not response:
-        logger.error("GPT returned no response")
-        return
-
-    memory.add_memory(chat_id, message, role="user")
-    memory.add_memory(chat_id, response, role="assistant")
 
     send_request("POST", "/api/sendText", {
         "chatId": chat_id,
@@ -115,12 +102,17 @@ def webhook():
     if not filter_msg(payload):
         logger.warning("Message filtered out or invalid.")
         return jsonify({"status": "ignored"}), 200
-
+    # logger.debug(f"Received payload: {payload}")
     msg = payload.get("body", "").strip()
+    logger.debug(f"Processing message: {msg}")
     try:
         handler = msg_router(msg)
-        if handler == Providers.GPT:
-            gpt_handler(payload)
+        if handler == Providers.CHAT:
+            # logger.debug("Routing to chat agent handler")
+            agent = MemoryAgent()
+            response = agent.send_message(payload)
+            chat_agent(payload, str(response))
+
         elif handler == Providers.DALLE:
             dalle_handler(payload)
     except Exception as e:
@@ -136,6 +128,10 @@ def pair():
 
     # Step 1: Check session status
     response = send_request("GET", f"/api/sessions/{session_name}")
+    
+    logger.debug(f"Session status response: {response}")
+    
+    
     if isinstance(response, dict) and "error" in response:
         return f"Failed to get session status: {response['error']}", 500
 
