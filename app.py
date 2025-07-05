@@ -9,7 +9,6 @@ import requests
 
 from config import config
 from utiles.logger import Logger
-from utiles.classes import Providers
 from memory_agent import MemoryAgent
 from providers.dalle import Dalle
 
