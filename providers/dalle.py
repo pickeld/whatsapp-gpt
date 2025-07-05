@@ -8,11 +8,14 @@ class Dalle:
     def __init__(self):
         self.model = config.dalle_model
         self.client = OpenAI(api_key=config.openai_api_key)
-    def dalle(self, prompt: str):
-        logger.info(f"Sending prompt to OpenAI DALL-E: {prompt}")
+        self.context = ""
+        self.prompt = ""
+        
+    def request(self):
+        logger.info(f"Sending prompt to OpenAI DALL-E with context: {self.context} and prompt: {self.prompt}")
         response = self.client.images.generate(
             model=self.model,
-            prompt=prompt
+            prompt=f"some erlier context: {self.context}, my request: {self.prompt}"
         )
         image_url = response.data[0].url
         return image_url
