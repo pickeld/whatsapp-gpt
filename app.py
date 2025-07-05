@@ -1,7 +1,7 @@
 import base64
 import requests
 
-from typing import Dict
+from typing import Dict, Union
 from flask import Flask, request, jsonify, render_template_string
 import httpx
 import base64
@@ -24,7 +24,7 @@ def get_memory_agent(recipient: str) -> MemoryAgent:
         _memory_agents[recipient] = MemoryAgent(recipient)
     return _memory_agents[recipient]
 
-def send_request(method: str, endpoint: str, payload: Dict = None):
+def send_request(method: str, endpoint: str, payload: Union[Dict,None] = None):
     payload = payload or {}
     headers = {"X-Api-Key": config.waha_api_key}
     url = f"{config.waha_api_url}{endpoint}"
