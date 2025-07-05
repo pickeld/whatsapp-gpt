@@ -3,4 +3,3 @@ openai
 flask
 python-dotenv
 qrcode[pil]
-agent-memory-client
