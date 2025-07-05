@@ -71,23 +71,18 @@ class QuotedMessage:
             endpoint = f"/api/files/default/{self.filename}"
             response = send_request(method="GET", endpoint=endpoint)
             self.base64_data = base64.b64encode(response.content).decode("ascii")
-        
-        
-
-    
 
 class WhatsappMSG:
     def __init__(self, payload):
-        # logger.debug(f"Initializing WhatsappMSG with payload: {payload}")
+        logger.debug(f"Initializing WhatsappMSG with payload: {payload}")
         self.message = payload.get("body", "").strip()
         self.sender = "me" if payload.get("fromMe") else payload.get("from", "")
         self.recipient = payload.get("to", "")
         self.has_media = payload.get("hasMedia", False)
         if self.has_media:
-            self.media = MediaMessage(payload.get("media"))    
-                
-        self.quoted = payload.get("_data", {}).get("quotedMsg", {})
-        if self.quoted:
+            self.media = MediaMessage(payload.get("media"))
+        self.has_quote = payload.get("_data", {}).get("quotedMsg", {})
+        if self.has_quote:
             try:
                 self.quoted = QuotedMessage(quoted_data=payload.get("_data", {}), recipient=self.recipient)
             except Exception as e:
@@ -101,6 +96,7 @@ class WhatsappMSG:
     def is_valid (self) -> bool:
         allowed_senders = []
         if self.sender not in ["me",allowed_senders]:
+            
             return False
         if not self.message.startswith(config.chat_prefix) and not self.message.startswith(config.dalle_prefix):
             return False
@@ -118,38 +114,18 @@ class WhatsappMSG:
             return "unknown"
     
     def reply(self, response: str):
-        send_request("POST", "/api/sendText", {
-            "chatId": self.recipient,
-            "text": response,
-            "session": "default"
-        })
+        send_request(method="POST",
+                     endpoint="/api/sendText",
+                     payload={
+                              "chatId": self.recipient,
+                              "text": response,
+                              "session": "default"
+                              }
+                     )
 
-    # def __str__(self):
-    #     return f"From: {self.sender}, To: {self.recipient}, Message: '{self.message}'"
-        
-        
-def dalle_handler(payload: Dict):
-    dalle = Dalle()
-    chat_id = payload.get("to")
-    message = payload.get("body", "").strip()
-
-    if not chat_id or not message:
-        logger.error("Invalid payload for DALL-E handler")
-        return
-
-    context = memory.get_context(chat_id, max_chars=3500)
-    logger.debug(f"Context for chat {chat_id}: {context}")
-    prompt = f"{context}\n{message}" if context else message
-    image_url = dalle.dalle(prompt)
-
-    memory.add_memory(chat_id, message, role="user")
-
-    send_request("POST", "/api/sendImage", {
-        "chatId": chat_id,
-        "file": {"url": image_url},
-        "session": "default"
-    })
-
+    def __str__(self):
+        return f"From: {self.sender}, To: {self.recipient}, Message: '{self.message}'"
+    
 
 @app.route("/health", methods=["GET"])
 def health():
@@ -160,18 +136,32 @@ def health():
 def webhook():
     payload = request.json.get("payload", {}) if request.json else {}
     whatsapp_msg = WhatsappMSG(payload)
-
+    mem_agent: MemoryAgent = get_memory_agent(whatsapp_msg.recipient)
+    mem_agent.remember(whatsapp_msg.message)
+    
     if not whatsapp_msg.is_valid():
         return jsonify({"status": "ignored"}), 200
 
     try:
         route = whatsapp_msg.route()
         if route == "chat":
-            mem_agent = get_memory_agent(whatsapp_msg.recipient)
             response = mem_agent.send_message(whatsapp_msg)
             whatsapp_msg.reply(str(response))
         elif route == "dalle":
-            dalle_handler(payload)
+            dalle = Dalle()
+            dalle.context = mem_agent.get_recent_text_context()
+            
+            dalle.prompt = whatsapp_msg.message[len(config.dalle_prefix):].strip()
+            image_url = dalle.request()
+            
+            send_request(method="POST", 
+                         endpoint="/api/sendImage", 
+                         payload={
+                             "chatId": payload.get("to"),
+                             "file": {"url": image_url},
+                             "session": "default"
+                             })
+            
         else:
             logger.debug(f"Message did not match any route: {whatsapp_msg.message}")
             return jsonify({"status": "no matching handler"}), 200
