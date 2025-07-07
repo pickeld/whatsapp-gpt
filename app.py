@@ -18,33 +18,108 @@ app = Flask(__name__)
 
 
 _memory_agents = {}
+_contacts = {}
+
+
+class Group:
+    def __init__(self, group_id):
+        self.group_id = group_id
+        self.data = self.get_group(group_id)
+        self.name = self.data.get("name", "")
+        self.participants = self.data.get("participants", [])
+        self.is_group = True
+        self.isMyGroup = True if self.data.get("isMyGroup", False) else False
+        self.isMe = True if self.data.get("isMe", False) else False
+
+    def get_group(self, id):
+        endpoint = f"/api/session/groups/{id}"
+        response = send_request(method="GET", endpoint=endpoint)
+        logger.debug(f"Retrieved group info for {id}: {response.json()}")
+        return response.json()
+
+    def __str__(self):
+        return f"Group ID: {self.group_id}, Name: {self.name}, Participants: {len(self.participants)}"
+
+
+class Contact:
+    def __init__(self, payload):
+        self._from = payload.get("from", "")
+        self.participant = payload.get("participant", "")
+        data = self.get_contact()
+
+        self.isMyContact = data.get("isMyContact", False)
+        if self.isMyContact:
+            self.name = data.get("name", "")
+        else:
+            self.name = data.get("pushname", "")
+
+        self.number = data.get("number", "")
+        self.isBusiness = data.get("isBusiness", False)
+        self.is_group = data.get("isGroup", False)
+        self.isUser = data.get("isUser", False)
+
+        self.isMe = data.get("isMe", False)
+        self.isBlocked = data.get("isBlocked", False)
+
+    def get_contact(self):
+        endpoint = f"/api/contacts"
+        contact = self.participant if self.participant and self.participant != "out@c.us" else self._from
+        params = {"contactId": contact, "session": "default"}
+        response = send_request(method="GET", endpoint=endpoint, params=params)
+        return response.json()
+
+    def __str__(self):
+        return self.__dict__.__str__()
+
+
+def get_contact(payload):
+    try:
+        sender = payload["participant"]
+    except KeyError:
+        sender = payload.get("from", None)
+
+    if sender not in _contacts:
+        _contacts[sender] = Contact(payload)
+    logger.debug(f"Retrieved contact for sender {sender}: {_contacts[sender]}")
+    return _contacts[sender]
+
 
 def get_memory_agent(recipient: str) -> MemoryAgent:
     if recipient not in _memory_agents:
         _memory_agents[recipient] = MemoryAgent(recipient)
     return _memory_agents[recipient]
 
-def send_request(method: str, endpoint: str, payload: Union[Dict,None] = None):
+
+def send_request(method: str, endpoint: str, payload: Union[Dict, None] = None, params: Union[Dict, None] = None):
     payload = payload or {}
+    params = params or {}
+
     headers = {"X-Api-Key": config.waha_api_key}
     url = f"{config.waha_api_url}{endpoint}"
+
     method_map = {
         "GET": requests.get,
         "POST": requests.post,
         "PUT": requests.put,
     }
 
-    # try:
     func = method_map[method.upper()]
-    response = func(url, headers=headers, stream=True, **({"json": payload} if method != "GET" else {}))
+
+    kwargs = {
+        "headers": headers,
+        "stream": True,
+    }
+
+    if method.upper() == "GET":
+        # fallback to payload if params not given
+        kwargs["params"] = params or payload
+    else:
+        kwargs["json"] = payload
+
+    response = func(url, **kwargs)
     response.raise_for_status()
-    logger.debug(f"Request to {url} completed with status code {response.status_code}")
+    # logger.debug(f"Request to {url} completed with status code {response.status_code}")
     return response
-    # except Exception as e:
-    #     if "/api/sessions/" in endpoint:
-    #         return {"error": str(e)}
-    #     logger.error(f"Request failed: {e}")
-    #     return {"error": str(e)}
 
 
 class MediaMessage:
@@ -52,7 +127,9 @@ class MediaMessage:
         # logger.debug(f"Message has media: {payload}")
         self.url = data.get('url')
         self.type = data.get('mimetype')
-        self.base64 = base64.standard_b64encode(httpx.get(self.url, headers={"X-Api-Key": config.waha_api_key}).content).decode("utf-8")
+        self.base64 = base64.standard_b64encode(httpx.get(
+            self.url, headers={"X-Api-Key": config.waha_api_key}).content).decode("utf-8")
+
 
 class QuotedMessage:
     def __init__(self, quoted_data, recipient):
@@ -70,33 +147,37 @@ class QuotedMessage:
             self.filename = f"true_{recipient}_{self.quoted_stanza_id}_{self.quoted_participant}.{self.file_extension}"
             endpoint = f"/api/files/default/{self.filename}"
             response = send_request(method="GET", endpoint=endpoint)
-            self.base64_data = base64.b64encode(response.content).decode("ascii")
+            self.base64_data = base64.b64encode(
+                response.content).decode("ascii")
+
 
 class WhatsappMSG:
     def __init__(self, payload):
-        logger.debug(f"Initializing WhatsappMSG with payload: {payload}")
+        # logger.debug(f"Initializing WhatsappMSG with payload: {payload}")
         self.message = payload.get("body", "").strip()
-        self.sender = "me" if payload.get("fromMe") else payload.get("from", "")
+        self.contact = get_contact(payload=payload)
         self.recipient = payload.get("to", "")
+        self._from = payload.get("from", "")
+        self.is_group = True if "@g" in self._from else False
+        if self.is_group:
+            self.group = Group(self._from)
         self.has_media = payload.get("hasMedia", False)
         if self.has_media:
             self.media = MediaMessage(payload.get("media"))
         self.has_quote = payload.get("_data", {}).get("quotedMsg", {})
         if self.has_quote:
             try:
-                self.quoted = QuotedMessage(quoted_data=payload.get("_data", {}), recipient=self.recipient)
+                self.quoted = QuotedMessage(quoted_data=payload.get(
+                    "_data", {}), recipient=self.recipient)
             except Exception as e:
                 logger.error(f"Error processing quoted message: {e}")
                 self.quoted = None
         else:
             self.quoted = None
-            
 
-        
-    def is_valid (self) -> bool:
+    def is_valid(self) -> bool:
         allowed_senders = []
-        if self.sender not in ["me",allowed_senders]:
-            
+        if self.contact.name not in ["Me", allowed_senders]:
             return False
         if not self.message.startswith(config.chat_prefix) and not self.message.startswith(config.dalle_prefix):
             return False
@@ -112,7 +193,7 @@ class WhatsappMSG:
             return "dalle"
         else:
             return "unknown"
-    
+
     def reply(self, response: str):
         send_request(method="POST",
                      endpoint="/api/sendText",
@@ -120,12 +201,12 @@ class WhatsappMSG:
                               "chatId": self.recipient,
                               "text": response,
                               "session": "default"
-                              }
+                     }
                      )
 
     def __str__(self):
-        return f"From: {self.sender}, To: {self.recipient}, Message: '{self.message}'"
-    
+        return f"From: {self.contact.name}, To: {self.recipient}, Message: '{self.message}'"
+
 
 @app.route("/health", methods=["GET"])
 def health():
@@ -136,9 +217,10 @@ def health():
 def webhook():
     payload = request.json.get("payload", {}) if request.json else {}
     whatsapp_msg = WhatsappMSG(payload)
-    mem_agent: MemoryAgent = get_memory_agent(whatsapp_msg.recipient)
-    mem_agent.remember(whatsapp_msg.message)
-    
+    mem_agent: MemoryAgent = get_memory_agent(whatsapp_msg._from)
+    mem_agent.remember(text=whatsapp_msg.message,
+                       role=whatsapp_msg.contact.name or "unknown")
+
     if not whatsapp_msg.is_valid():
         return jsonify({"status": "ignored"}), 200
 
@@ -150,29 +232,29 @@ def webhook():
         elif route == "dalle":
             dalle = Dalle()
             dalle.context = mem_agent.get_recent_text_context()
-            
-            dalle.prompt = whatsapp_msg.message[len(config.dalle_prefix):].strip()
+
+            dalle.prompt = whatsapp_msg.message[len(
+                config.dalle_prefix):].strip()
             image_url = dalle.request()
-            
-            send_request(method="POST", 
-                         endpoint="/api/sendImage", 
+
+            send_request(method="POST",
+                         endpoint="/api/sendImage",
                          payload={
                              "chatId": payload.get("to"),
                              "file": {"url": image_url},
                              "session": "default"
-                             })
-            
+                         })
+
         else:
-            logger.debug(f"Message did not match any route: {whatsapp_msg.message}")
+            logger.debug(
+                f"Message did not match any route: {whatsapp_msg.message}")
             return jsonify({"status": "no matching handler"}), 200
         return jsonify({"status": "ok"}), 200
-    
+
     except Exception as e:
         logger.error(f"Failed to process message: {e}")
         raise
         return jsonify({"error": str(e)}), 400
-
-    
 
 
 @app.route("/pair", methods=["GET"])
@@ -183,15 +265,15 @@ def pair():
     # print(f"Response: {response.json()}")
     # logger.debug(f"Session status response: {response}")
 
-
     status_data = response.json()
     logger.debug(f"Status data: {status_data}")
-    
+
     if status_data.get("status") == "WORKING" and status_data.get("engine", {}).get("state") == "CONNECTED":
         return "<h1>Session 'default' is already connected.</h1>", 200
 
     if status_data.get("status") != "SCAN_QR_CODE":
-        send_request(method="POST", endpoint="/api/sessions/start", payload={"name": session_name})
+        send_request(method="POST", endpoint="/api/sessions/start",
+                     payload={"name": session_name})
 
         # Step 3: Configure webhook
         send_request("PUT", f"/api/sessions/{session_name}", {
