@@ -179,34 +179,31 @@ def webhook():
 def pair():
     session_name = "default"
 
-    # Step 1: Check session status
     response = send_request("GET", f"/api/sessions/{session_name}")
     # print(f"Response: {response.json()}")
     # logger.debug(f"Session status response: {response}")
-    
-    
-    # if isinstance(response, dict) and "error" in response:
-    #     return f"Failed to get session status: {response['error']}", 500
+
 
     status_data = response.json()
-    print(f"Status data: {status_data}")
+    logger.debug(f"Status data: {status_data}")
+    
     if status_data.get("status") == "WORKING" and status_data.get("engine", {}).get("state") == "CONNECTED":
         return "<h1>Session 'default' is already connected.</h1>", 200
 
-    # Step 2: Start session
-    send_request("POST", "/api/sessions/start", {"name": session_name})
+    if status_data.get("status") != "SCAN_QR_CODE":
+        send_request(method="POST", endpoint="/api/sessions/start", payload={"name": session_name})
 
-    # Step 3: Configure webhook
-    send_request("PUT", f"/api/sessions/{session_name}", {
-        "config": {
-            "webhooks": [
-                {
-                    "url": config.webhook_url,
-                    "events": ["message.any", "session.status"]
-                }
-            ]
-        }
-    })
+        # Step 3: Configure webhook
+        send_request("PUT", f"/api/sessions/{session_name}", {
+            "config": {
+                "webhooks": [
+                    {
+                        "url": config.webhook_url,
+                        "events": ["message.any", "session.status"]
+                    }
+                ]
+            }
+        })
 
     # Step 4: Get QR code
     qr_response = send_request("GET", f"/api/{session_name}/auth/qr")
